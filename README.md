@@ -1,8 +1,8 @@
 # Baby GPT on Shakespeare
 
-*A learning experiment: training a small character-level GPT from scratch.*
+*A learning experiment: training a small character-level GPT from scratch, on a MacBook.*
 
-I'm trying to understand how GPTs work by training a tiny one myself. This repo follows Andrej Karpathy's [nanoGPT](https://github.com/karpathy/nanoGPT) (MIT license), and these are my notes from running it. None of this is original work. It's just a record of what I tried and what I learned.
+I'm trying to understand how GPTs work by training a tiny one myself. I only have a MacBook (M1, 8GB), so everything here is scaled to run on it. This repo follows Andrej Karpathy's [nanoGPT](https://github.com/karpathy/nanoGPT) (MIT license), and these are my notes from working through it. None of this is original work. It's a record of what I'm learning.
 
 ## Setup
 
@@ -20,75 +20,75 @@ What each package is for, as far as I understand it:
 - `wandb`: optional experiment logging
 - `tqdm`: progress bars
 
-## Experiment 1: Shakespeare, character by character
+## Step 1: prepare the data
 
-I started with the smallest setup: a character-level model trained on Shakespeare's works. The data prep script downloads a ~1MB text file and turns it into one long stream of integers:
+The script downloads a ~1MB text file of Shakespeare's works and turns it into one long stream of integers, one per character:
 
 ```sh
 python data/shakespeare_char/prepare.py
 ```
 
-This creates `train.bin` and `val.bin`. Then I trained with the config in [config/train_shakespeare_char.py](config/train_shakespeare_char.py):
+This creates `train.bin` and `val.bin`.
+
+## Step 2: train a small model on the MacBook
+
+nanoGPT's default config assumes a GPU, so I shrank the model to fit a laptop:
+
+```sh
+python train.py config/train_shakespeare_char.py --device=mps --compile=False --eval_iters=20 --log_interval=1 --block_size=64 --batch_size=12 --n_layer=4 --n_head=4 --n_embd=128 --max_iters=2000 --lr_decay_iters=2000 --dropout=0.0
+```
+
+What each flag does, as I understand it:
+
+- `--device=mps`: run on the Mac's on-chip GPU
+- `--compile=False`: PyTorch 2.0 compile turned off
+- `--eval_iters=20` (down from 200): noisier but faster validation
+- `--block_size=64` (down from 256): the model sees 64 characters of context instead of 256
+- `--batch_size=12` (down from 64): fewer examples per step
+- `--n_layer=4 --n_head=4 --n_embd=128`: 4 layers, 4 attention heads, 128 feature channels, instead of 6, 6 and 384
+- `--max_iters=2000 --lr_decay_iters=2000`: fewer steps, with the learning rate decaying over the same length
+- `--dropout=0.0`: less regularization, since the network is already tiny
+
+### Using the Mac's GPU
+
+I'm on an M1 with 8GB of unified memory, so I train with `--device=mps`, which runs on the on-chip GPU through Metal Performance Shaders. nanoGPT says this can speed training up 2-3x compared to the CPU. If `mps` gives errors, replace it with `--device=cpu` and everything else stays the same.
+
+Since the 8GB is shared between the system and the GPU, this small model fits comfortably. When scaling up, I'll change one setting at a time (for example `--n_embd` or `--block_size`) and close heavy apps before longer runs.
+
+## Step 3: sample from the model
+
+```sh
+python sample.py --out_dir=out-shakespeare-char --device=mps
+```
+
+nanoGPT shows output like this for the small laptop setup (not from my run):
+
+```
+GLEORKEN VINGHARD III:
+Whell's the couse, the came light gacks,
+And the for mought you in Aut fries the not high shee
+bot thou the sought bechive in that to doth groan you,
+No relving thee post mose the wear
+```
+
+## For comparison: the full-size run
+
+nanoGPT's default config trains a bigger model: 256 characters of context, 384 feature channels, and 6 layers with 6 heads each. It reports about 3 minutes on one A100 GPU and a best validation loss of 1.4697. I haven't run this one, since it needs a GPU I don't have:
 
 ```sh
 python train.py config/train_shakespeare_char.py
 ```
 
-The model has a context of 256 characters, 384 feature channels, and 6 Transformer layers with 6 attention heads each.
+## What the numbers show
 
-**My result:** [your hardware, training time, best validation loss]
-*(For reference, nanoGPT reports about 3 minutes and a validation loss of 1.47 on one A100.)*
-
-Checkpoints are saved to `out-shakespeare-char`, and I sampled from the best one with:
-
-```sh
-python sample.py --out_dir=out-shakespeare-char
-```
-
-**A sample from my run:**
-
-```
-[paste a real sample here]
-```
-
-## Experiment 2: scaling it down for a laptop
-
-I don't have a GPU, so I shrank everything to run on a CPU:
-
-```sh
-python train.py config/train_shakespeare_char.py --device=cpu --compile=False --eval_iters=20 --log_interval=1 --block_size=64 --batch_size=12 --n_layer=4 --n_head=4 --n_embd=128 --max_iters=2000 --lr_decay_iters=2000 --dropout=0.0
-```
-
-What I changed and why, as I understand it:
-
-- `--device=cpu --compile=False`: no GPU, and PyTorch 2.0 compile is turned off
-- `--eval_iters=20` (down from 200): noisier but faster validation
-- `--block_size=64` (down from 256): shorter context
-- `--batch_size=12` (down from 64): fewer examples per step
-- `--n_layer=4 --n_head=4 --n_embd=128`: a much smaller Transformer
-- `--max_iters=2000 --lr_decay_iters=2000`: fewer steps, with the learning rate decaying over the same length
-- `--dropout=0.0`: less regularization, since the network is already tiny
-
-**My result:** [training time, final loss]
-*(nanoGPT reports about 3 minutes and a loss of 1.88 for this setup.)*
-
-```sh
-python sample.py --out_dir=out-shakespeare-char --device=cpu
-```
-
-```
-[paste a real sample here]
-```
-
-On an Apple Silicon Mac, `--device=mps` uses the on-chip GPU and should speed training up noticeably.
-
-## What I learned
-
-- [e.g. what changed when I made the model smaller]
-- [e.g. how loss related to sample quality]
-- [e.g. what surprised me]
+- nanoGPT reports about 1.88 loss for the small laptop setup versus 1.47 for the full-size one. Shrinking the model, context, and batch size has a visible cost in quality.
+- The samples reflect that: the small model picks up the shape of words and verse, but not their meaning.
+- Character-level modeling keeps the setup simple (a vocabulary of about 65 symbols), but the model has to learn spelling from scratch and only sees a very short window of text.
 
 ## What I want to try next
 
-- [e.g. a subword tokenizer (BPE) instead of characters]
-- [e.g. a different dataset]
+- A subword tokenizer (BPE) instead of characters
+- A different dataset
+- Changing one setting at a time to see which one affects the loss most
+- Sample from the pretrained GPT-2 (124M) and compare it with my character-level model
+- Finetune GPT-2 (124M) on Shakespeare using the BPE tokenizer, with a smaller batch size and context to fit in 8GB
