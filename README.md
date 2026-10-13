@@ -84,10 +84,21 @@ bot thou the sought bechive in that to doth groan you,
 No relving thee post mose the wear
 ```
 
+### Nucleus (top-p) sampling
+
+I added top-p sampling to `model.py` and `sample.py`. It keeps only the smallest set of characters whose probabilities add up to `top_p`, and samples from those:
+
+```sh
+python sample.py --out_dir=out-shakespeare-char --device=mps --top_p=0.9
+```
+
+Lower values give safer, more repetitive text, and `--top_p=1.0` turns it off. Write it as a decimal (`1.0`, not `1`), because the config system expects the same type as the default.
+
 ## What I changed from nanoGPT
 
 - `train.py`: logs train loss, validation loss, learning rate, and elapsed time to `loss_log.csv` at every evaluation. Also defaults `dtype` to float32 when there is no CUDA GPU, and only enables the GradScaler for float16 on CUDA, so `mps` and CPU runs don't trigger the CUDA warning.
 - `plot_loss.py` (new): plots the loss curve from the CSV.
+-  `model.py` and `sample.py`: added top-p (nucleus) sampling
 
 Everything else is unchanged from the original.
 
