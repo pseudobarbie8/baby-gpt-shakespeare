@@ -17,6 +17,7 @@ $ torchrun --nproc_per_node=8 --nnodes=2 --node_rank=1 --master_addr=123.456.123
 """
 
 import os
+import csv  # [mine] for the loss log
 import time
 import math
 import pickle
@@ -70,7 +71,11 @@ min_lr = 6e-5 # minimum learning rate, should be ~= learning_rate/10 per Chinchi
 backend = 'nccl' # 'nccl', 'gloo', etc.
 # system
 device = 'cuda' # examples: 'cpu', 'cuda', 'cuda:0', 'cuda:1' etc., or try 'mps' on macbooks
-dtype = 'bfloat16' if torch.cuda.is_available() and torch.cuda.is_bf16_supported() else 'float16' # 'float32', 'bfloat16', or 'float16', the latter will auto implement a GradScaler
+# [mine] float32 by default when there is no CUDA GPU (cpu / mps), which avoids the GradScaler warning
+if torch.cuda.is_available():
+    dtype = 'bfloat16' if torch.cuda.is_bf16_supported() else 'float16' # 'float32', 'bfloat16', or 'float16', the latter will auto implement a GradScaler
+else:
+    dtype = 'float32'
 compile = True # use PyTorch 2.0 to compile the model to be faster
 # -----------------------------------------------------------------------------
 config_keys = [k for k,v in globals().items() if not k.startswith('_') and isinstance(v, (int, float, bool, str))]
@@ -193,7 +198,8 @@ if block_size < model.config.block_size:
 model.to(device)
 
 # initialize a GradScaler. If enabled=False scaler is a no-op
-scaler = torch.cuda.amp.GradScaler(enabled=(dtype == 'float16'))
+# [mine] only enabled for float16 on CUDA, so cpu / mps never trigger the CUDA warning
+scaler = torch.cuda.amp.GradScaler(enabled=(dtype == 'float16' and device_type == 'cuda'))
 
 # optimizer
 optimizer = model.configure_optimizers(weight_decay, learning_rate, (beta1, beta2), device_type)
@@ -246,9 +252,16 @@ if wandb_log and master_process:
     import wandb
     wandb.init(project=wandb_project, name=wandb_run_name, config=config)
 
+# [mine] CSV loss log: a fresh file for each run that starts from scratch
+loss_log_path = os.path.join(out_dir, 'loss_log.csv')
+if master_process and init_from != 'resume':
+    with open(loss_log_path, 'w', newline='') as f:
+        csv.writer(f).writerow(['iter', 'train_loss', 'val_loss', 'lr', 'elapsed_s'])
+
 # training loop
 X, Y = get_batch('train') # fetch the very first batch
 t0 = time.time()
+t_start = time.time() # [mine] wall-clock start, used for the elapsed column in the CSV
 local_iter_num = 0 # number of iterations in the lifetime of this process
 raw_model = model.module if ddp else model # unwrap DDP container if needed
 running_mfu = -1.0
@@ -263,6 +276,15 @@ while True:
     if iter_num % eval_interval == 0 and master_process:
         losses = estimate_loss()
         print(f"step {iter_num}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}")
+        # [mine] append this evaluation to the CSV
+        with open(loss_log_path, 'a', newline='') as f:
+            csv.writer(f).writerow([
+                iter_num,
+                f"{losses['train']:.4f}",
+                f"{losses['val']:.4f}",
+                f"{lr:.6f}",
+                f"{time.time() - t_start:.1f}",
+            ])
         if wandb_log:
             wandb.log({
                 "iter": iter_num,
