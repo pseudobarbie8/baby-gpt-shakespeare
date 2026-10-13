@@ -1,70 +1,94 @@
-# Training a character level tiny GPT on Shakespeare
-experimenting with a tiny GPT with a context size of up to 256 characters, 384 feature channels, and it is a 6-layer Transformer with 6 heads in each layer. On one A100 GPU this training run takes about 3 minutes and the best validation loss is 1.4697.
+# Baby GPT on Shakespeare
 
-## install
+*A learning experiment: training a small character-level GPT from scratch.*
 
-```
+I'm trying to understand how GPTs work by training a tiny one myself. This repo follows Andrej Karpathy's [nanoGPT](https://github.com/karpathy/nanoGPT) (MIT license), and these are my notes from running it. None of this is original work. It's just a record of what I tried and what I learned.
+
+## Setup
+
+```sh
 pip install torch numpy transformers datasets tiktoken wandb tqdm
 ```
 
-Dependencies:
+What each package is for, as far as I understand it:
 
-- [pytorch](https://pytorch.org) <3
-- [numpy](https://numpy.org/install/) <3
--  `transformers` for huggingface transformers <3 (to load GPT-2 checkpoints)
--  `datasets` for huggingface datasets <3 (if you want to download + preprocess OpenWebText)
--  `tiktoken` for OpenAI's fast BPE code <3
--  `wandb` for optional logging <3
--  `tqdm` for progress bars <3
+- `torch`: the deep learning framework the model is built in
+- `numpy`: array handling
+- `transformers`: loading GPT-2 checkpoints (not needed for the Shakespeare run)
+- `datasets`: downloading and preprocessing OpenWebText (also not needed here)
+- `tiktoken`: OpenAI's fast BPE tokenizer
+- `wandb`: optional experiment logging
+- `tqdm`: progress bars
 
-## quick start
+## Experiment 1: Shakespeare, character by character
 
-If you are not a deep learning professional and you just want to feel the magic and get your feet wet, the fastest way to get started is to train a character-level GPT on the works of Shakespeare. First, we download it as a single (1MB) file and turn it from raw text into one large stream of integers:
+I started with the smallest setup: a character-level model trained on Shakespeare's works. The data prep script downloads a ~1MB text file and turns it into one long stream of integers:
 
 ```sh
 python data/shakespeare_char/prepare.py
 ```
 
-This creates a `train.bin` and `val.bin` in that data directory. Now it is time to train your GPT. The size of it very much depends on the computational resources of your system:
-
-**I have a GPU**. Great, we can quickly train a baby GPT with the settings provided in the [config/train_shakespeare_char.py](config/train_shakespeare_char.py) config file:
+This creates `train.bin` and `val.bin`. Then I trained with the config in [config/train_shakespeare_char.py](config/train_shakespeare_char.py):
 
 ```sh
 python train.py config/train_shakespeare_char.py
 ```
 
-If you peek inside it, you'll see that we're training a GPT with a context size of up to 256 characters, 384 feature channels, and it is a 6-layer Transformer with 6 heads in each layer. On one A100 GPU this training run takes about 3 minutes and the best validation loss is 1.4697. Based on the configuration, the model checkpoints are being written into the `--out_dir` directory `out-shakespeare-char`. So once the training finishes we can sample from the best model by pointing the sampling script at this directory:
+The model has a context of 256 characters, 384 feature channels, and 6 Transformer layers with 6 attention heads each.
+
+**My result:** [your hardware, training time, best validation loss]
+*(For reference, nanoGPT reports about 3 minutes and a validation loss of 1.47 on one A100.)*
+
+Checkpoints are saved to `out-shakespeare-char`, and I sampled from the best one with:
 
 ```sh
 python sample.py --out_dir=out-shakespeare-char
 ```
 
-This generates a few samples, for example:
+**A sample from my run:**
 
 ```
+[paste a real sample here]
+```
 
-** Since I only have a macbook**, I still trained a GPT but I had to dial things down a notch. It's recommended to get the bleeding edge PyTorch nightly ([select it here](https://pytorch.org/get-started/locally/) when installing) as it is currently quite likely to make the code more efficient. But even without it, a simple train run could look as follows:
+## Experiment 2: scaling it down for a laptop
+
+I don't have a GPU, so I shrank everything to run on a CPU:
 
 ```sh
 python train.py config/train_shakespeare_char.py --device=cpu --compile=False --eval_iters=20 --log_interval=1 --block_size=64 --batch_size=12 --n_layer=4 --n_head=4 --n_embd=128 --max_iters=2000 --lr_decay_iters=2000 --dropout=0.0
 ```
 
-Here, since we are running on CPU instead of GPU we must set both `--device=cpu` and also turn off PyTorch 2.0 compile with `--compile=False`. Then when we evaluate we get a bit more noisy but faster estimate (`--eval_iters=20`, down from 200), our context size is only 64 characters instead of 256, and the batch size only 12 examples per iteration, not 64. We'll also use a much smaller Transformer (4 layers, 4 heads, 128 embedding size), and decrease the number of iterations to 2000 (and correspondingly usually decay the learning rate to around max_iters with `--lr_decay_iters`). Because our network is so small we also ease down on regularization (`--dropout=0.0`). This still runs in about ~3 minutes, but gets us a loss of only 1.88 and therefore also worse samples, but it's still good fun:
+What I changed and why, as I understand it:
+
+- `--device=cpu --compile=False`: no GPU, and PyTorch 2.0 compile is turned off
+- `--eval_iters=20` (down from 200): noisier but faster validation
+- `--block_size=64` (down from 256): shorter context
+- `--batch_size=12` (down from 64): fewer examples per step
+- `--n_layer=4 --n_head=4 --n_embd=128`: a much smaller Transformer
+- `--max_iters=2000 --lr_decay_iters=2000`: fewer steps, with the learning rate decaying over the same length
+- `--dropout=0.0`: less regularization, since the network is already tiny
+
+**My result:** [training time, final loss]
+*(nanoGPT reports about 3 minutes and a loss of 1.88 for this setup.)*
 
 ```sh
 python sample.py --out_dir=out-shakespeare-char --device=cpu
 ```
-Generates samples like this:
 
 ```
-GLEORKEN VINGHARD III:
-Whell's the couse, the came light gacks,
-And the for mought you in Aut fries the not high shee
-bot thou the sought bechive in that to doth groan you,
-No relving thee post mose the wear
+[paste a real sample here]
 ```
 
-Not bad for ~3 minutes on a CPU, for a hint of the right character gestalt. If you're willing to wait longer, feel free to tune the hyperparameters, increase the size of the network, the context length (`--block_size`), the length of training, etc.
+On an Apple Silicon Mac, `--device=mps` uses the on-chip GPU and should speed training up noticeably.
 
-Finally, on Apple Silicon Macbooks and with a recent PyTorch version make sure to add `--device=mps` (short for "Metal Performance Shaders"); PyTorch then uses the on-chip GPU that can *significantly* accelerate training (2-3X) and allow you to use larger networks.
+## What I learned
 
+- [e.g. what changed when I made the model smaller]
+- [e.g. how loss related to sample quality]
+- [e.g. what surprised me]
+
+## What I want to try next
+
+- [e.g. a subword tokenizer (BPE) instead of characters]
+- [e.g. a different dataset]
